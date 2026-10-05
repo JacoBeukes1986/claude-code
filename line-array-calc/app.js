@@ -1,7 +1,7 @@
 // Browser UI for the line array calculator. All maths lives in ./src; this file only reads the
 // form, calls calculate() and draws the result.
 
-import { calculate, GENRES } from './src/index.js';
+import { BOX_LIST, calculate, compareBoxes, GENRES } from './src/index.js';
 
 const $ = (id) => document.getElementById(id);
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -23,6 +23,9 @@ const SHORT_CODE = {
 
 let last = null; // last good result, kept on screen (dimmed) while the form is invalid
 let cross = null; // index into last.profile for the crosshair
+let preferredBoxId = 'rcf-hdl-30-a'; // the speaker the user picked; distance mode may show another
+let shownBoxId = preferredBoxId; // the speaker on screen
+const shortName = (box) => box.name.replace(/^(RCF|TT\+) /, '');
 
 function el(tag, props = {}, ...kids) {
   const node = document.createElement(tag);
@@ -71,6 +74,49 @@ function buildGenreOptions() {
   }
 }
 
+function buildBoxOptions() {
+  const seg = $('boxSeg');
+  for (const box of BOX_LIST) {
+    const input = el('input', { type: 'radio', name: 'box', value: box.id, id: `box-${box.id}`, checked: box.id === preferredBoxId });
+    input.addEventListener('change', () => {
+      preferredBoxId = box.id;
+    });
+    const opt = el(
+      'span',
+      { class: 'opt' },
+      el('b', { text: shortName(box) }),
+      el('small', { text: `${box.family.startsWith('TT') ? 'TT+ · ' : ''}${box.maxSplDb} dB · ${box.coverageHDeg}°×${box.coverageVDeg}° · ${box.weightKg} kg` }),
+      el('small', { class: 'status', id: `status-${box.id}`, hidden: true }),
+    );
+    seg.append(el('label', {}, input, opt));
+  }
+}
+
+/** Mode B greys out the speakers that cannot meet the spec and says why on each card. */
+function renderBoxOptions(comparison, boxId, note) {
+  for (const box of BOX_LIST) {
+    const input = $(`box-${box.id}`);
+    const status = $(`status-${box.id}`);
+    const c = comparison?.find((x) => x.box.id === box.id);
+    input.checked = box.id === boxId;
+    input.disabled = Boolean(c && !c.meetsSpec);
+    status.hidden = !c;
+    if (!c) continue;
+    status.className = `status ${c.meetsSpec ? 'ok' : 'no'}`;
+    status.textContent = c.meetsSpec
+      ? `✓ ${c.result.boxCount} boxes · ${f1(c.result.spacing.usedM)} m · ${signed(c.result.target.fohMarginDb)} dB`
+      : `✕ ${c.reasons[0]}`;
+  }
+  const hint = $('boxHint');
+  hint.hidden = !comparison;
+  if (comparison) {
+    const ok = comparison.filter((c) => c.meetsSpec).length;
+    hint.textContent =
+      (note ? `${note} ` : '') +
+      `${ok} of ${comparison.length} speakers can reach the back with the genre level and headroom; the rest are greyed out.`;
+  }
+}
+
 function readInputs() {
   const fd = new FormData($('controls'));
   const num = (name) => {
@@ -98,8 +144,30 @@ function update() {
   const inputs = readInputs();
   for (const node of document.querySelectorAll('[data-mode]')) node.hidden = node.dataset.mode !== inputs.mode;
   let r;
+  let comparison = null;
+  let boxId = preferredBoxId;
+  let note = null;
   try {
-    r = calculate(inputs);
+    if (inputs.mode === 'B') {
+      // Distance mode: run every speaker, keep the user's pick if it meets the spec, otherwise
+      // show the first one in the list that does.
+      comparison = compareBoxes(inputs);
+      const picked = comparison.find((c) => c.box.id === preferredBoxId);
+      if (!picked.meetsSpec) {
+        const fallback = comparison.find((c) => c.meetsSpec);
+        if (fallback) {
+          boxId = fallback.box.id;
+          note = `${shortName(picked.box)} cannot (${picked.reasons[0]}), so ${shortName(fallback.box)} is shown.`;
+        } else {
+          note = `None can, so ${shortName(picked.box)} is shown with its warnings.`;
+        }
+      }
+      const shown = comparison.find((c) => c.box.id === boxId);
+      if (!shown.result) throw new Error(shown.reasons[0]);
+      r = shown.result;
+    } else {
+      r = calculate({ ...inputs, boxId });
+    }
   } catch (err) {
     $('error').textContent = `${err.message} Showing the last valid result.`;
     $('error').hidden = false;
@@ -110,6 +178,13 @@ function update() {
   $('results').style.opacity = '';
   last = r;
   cross = null;
+  shownBoxId = boxId;
+  renderBoxOptions(comparison, boxId, note);
+  // In distance mode the box count follows the depth; switching back to mode A keeps it.
+  const count = $('boxCount');
+  count.readOnly = inputs.mode === 'B';
+  if (inputs.mode === 'B') count.value = String(r.boxCount);
+  $('boxCountLabel').textContent = inputs.mode === 'B' ? 'Boxes per hang (set by the room depth)' : 'Boxes per hang';
   renderFlag(r);
   renderTiles(r);
   renderLegend(r);
@@ -117,7 +192,7 @@ function update() {
   renderWarnings(r);
   renderSpl(r);
   renderSplays(r);
-  renderGenres(inputs);
+  renderGenres({ ...inputs, boxId });
   renderProfile(r);
   renderNotes(r);
 }
@@ -132,7 +207,7 @@ function renderFlag(r) {
     const list = labels.length > 1 ? `${labels.slice(0, -1).join(', ')} and ${labels.at(-1)}` : labels[0];
     flag.replaceChildren(
       badge('warn', 'Unverified'),
-      el('span', { text: `${list[0].toUpperCase()}${list.slice(1)} still to be checked against the HDL 30-A rigging manual.` }),
+      el('span', { text: `${r.box.name}: ${list} still to be checked against the manual.` }),
     );
   }
 }
@@ -143,7 +218,9 @@ function renderTiles(r) {
     r.mode === 'B'
       ? r.binding
         ? `${r.neededBoxes} needed, capped by the ${r.binding === 'trim' ? 'trim height' : r.binding === 'rigging' ? 'fly-bar rating' : 'angle-resolution limit'}`
-        : `${r.neededBoxes} needed to reach ${metres(r.input.roomDepthM)}`
+        : r.spacing.widenedFromM
+          ? `To reach ${metres(r.input.roomDepthM)}, spacing widened from ${f1(r.spacing.widenedFromM)} m`
+          : `Needed to reach ${metres(r.input.roomDepthM)}`
       : `${r.limits.maxUsefulBoxes} useful at this spacing · fly bar max ${r.limits.riggingMaxBoxes}`;
   const margin = r.target.fohMarginDb;
   $('tiles').replaceChildren(
@@ -155,7 +232,11 @@ function renderTiles(r) {
       `${margin >= 0 ? 'Meets' : 'Short of'} ${r.target.laeqDbA} dBA with ${r.target.headroomDb} dB headroom at ${f1(r.spl.foh.distanceM)} m`,
       margin >= 0 ? 'good' : 'bad',
     ),
-    tile('Hang', `${Math.round(r.rigging.hangWeightKg)} kg`, `${f1(r.rigging.arrayLengthM)} m long · bottom at ${f1(r.rigging.bottomEdgeM)} m · tilt ${f1(r.rigging.topTiltDeg)}°`),
+    tile(
+      'Hang',
+      `${Math.round(r.rigging.hangWeightKg)} kg`,
+      `${r.rigging.flyBarWeightKnown ? '' : 'Boxes only (fly-bar weight unknown) · '}${f1(r.rigging.arrayLengthM)} m long · bottom at ${f1(r.rigging.bottomEdgeM)} m · tilt ${f1(r.rigging.topTiltDeg)}°`,
+    ),
   );
 }
 
@@ -496,13 +577,17 @@ function renderNotes(r) {
     item('Rigging', `${r.rigging.note} Hang weight is boxes plus fly bar only (no motors, chain or cable).`),
     item(
       'SPL model',
-      'Each box is a point source at its 137 dB peak spec (unweighted) with a 15° Gaussian vertical pattern, inverse-square distance loss and ISO 9613-1 air absorption at 20 °C / 50 % RH, summed on an energy basis. A-weighting a pink-noise-like programme takes 2.4 dB off. It is not calibrated yet, so confidence tops out at medium.',
+      `Each box is a point source at its peak spec (${r.box.name}: ${r.box.maxSplDb} dB, unweighted) with a ${r.box.coverageVDeg}° Gaussian vertical pattern, inverse-square distance loss and ISO 9613-1 air absorption at 20 °C / 50 % RH, summed on an energy basis. A-weighting a pink-noise-like programme takes 2.4 dB off. It is not calibrated yet, so confidence tops out at medium.`,
     ),
     item(
       'Why not 3 dB / 6 dB per doubling',
       'Taken from 1 m with a coupling gain, that rule puts every box’s output on one axis and overstates a curved array by about 15–20 dB. Its front-to-back slope is similar; the energy sum fixes the level and makes it depend on spacing and trim height.',
     ),
     item('Max LAeq', 'Peak capability less the genre headroom. With an L/R pair both hangs are summed on the centre line, each with its horizontal off-axis loss.'),
+    item(
+      'Distance mode',
+      'Each speaker first tries the genre spacing. If its array cannot reach the back at that spacing, the spacing is widened (up to 3×) until it does; the speaker meets the spec only if the mix position still gets the genre level with its headroom. A hand-set spacing is never widened.',
+    ),
     item(
       'Angle-resolution limit',
       `Where an aim point can no longer be kept within ${r.input.holdTolerance} × spacing of its target: either even the smallest splay spreads aim points too far apart, or the preset steps are too coarse even when dithered.`,
@@ -515,7 +600,16 @@ function renderNotes(r) {
 // ---------------------------------------------------------------- boot
 
 buildGenreOptions();
-$('controls').addEventListener('input', update);
+buildBoxOptions();
+// Leaving distance mode keeps the speaker it was showing, since the carried-over box count is its.
+$('modeA').addEventListener('change', () => {
+  preferredBoxId = shownBoxId;
+});
+let pending = 0;
+$('controls').addEventListener('input', () => {
+  clearTimeout(pending);
+  pending = setTimeout(update, 90);
+});
 $('controls').addEventListener('submit', (e) => e.preventDefault());
 let resizeFrame = 0;
 new ResizeObserver(() => {

@@ -18,6 +18,10 @@ export const MODEL = {
   // (crowd absorption and reflections at grazing incidence are not modelled).
   deepRoom: { maxDropDb: 6, minGrazingDeg: 7 },
 
+  // Distance mode widens the genre spacing up to this factor when the array cannot otherwise
+  // reach the back; the level check then decides whether the result still meets the spec.
+  maxSpacingFactor: 3,
+
   // Arrays shorter than this get an info note about limited low-mid pattern control.
   shortArrayBoxes: 4,
 

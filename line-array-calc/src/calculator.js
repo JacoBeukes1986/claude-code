@@ -3,7 +3,7 @@
 // Mode A: box count + genre -> coverage depth, SPL front / mix / back, splay list.
 // Mode B: room depth + genre -> recommended box count, splay list, rigging check.
 
-import { BOXES } from './boxes.js';
+import { BOX_LIST, findBox } from './boxes.js';
 import { GENRES } from './genres.js';
 import { DEFAULTS, MODEL } from './model.js';
 import { DEG, hangArray, holdLimit } from './geometry.js';
@@ -33,39 +33,75 @@ const CONFIDENCE = ['low', 'medium', 'high'];
 /** @param {CalcInput} raw */
 export function calculate(raw = {}) {
   const input = resolveInput(raw);
-  const { box, genre } = input;
+  const spacingM = input.spacingM ?? input.genre.spacingM;
+  const first = layout(input, spacingM);
+  // Distance mode tries to reach the back. When the genre spacing hits a cap, widen it (unless
+  // the spacing was set by hand); the level check then decides whether that still meets the spec.
+  if (input.mode === 'B' && first.binding && input.spacingM == null) {
+    const wider = widenToReach(input, spacingM);
+    return solve(input, wider ? layout(input, wider) : first, {
+      fromM: spacingM,
+      toM: wider,
+      triedUpToM: spacingM * MODEL.maxSpacingFactor,
+    });
+  }
+  return solve(input, first, null);
+}
+
+/**
+ * Geometry only (limits, aim targets, the hung array) for one spacing: cheap enough to search
+ * over. `quick` stops the hold-limit scan at the room depth, which is all a reach check needs.
+ */
+function layout(input, spacingM, quick = false) {
+  const { box } = input;
   const presets = [...box.splayPresetsDeg].sort((a, b) => a - b);
   const listenerZ = input.listenerHeightM;
-  const spacingM = input.spacingM ?? genre.spacingM;
+  const holdAt = (s) =>
+    holdLimit({
+      dh: input.trimHeightM - box.heightM / 2 - listenerZ,
+      spacingM: s,
+      presets,
+      heightM: box.heightM,
+      tolerance: input.holdTolerance,
+      fromM: input.frontRowM,
+      untilM: quick ? input.roomDepthM + 0.1 : undefined,
+    });
+  const plan = input.mode === 'A' ? planModeA(input, spacingM, holdAt) : planModeB(input, spacingM, holdAt);
+  const hang = hangArray({ heightM: box.heightM, presets, trimHeightM: input.trimHeightM, listenerZ, targets: plan.targets });
+  const binding = hang.truncated > 0 && input.mode === 'B' ? 'trim' : plan.binding;
+  return { presets, listenerZ, plan, hang, binding };
+}
+
+/**
+ * Smallest spacing from `fromM` up to MODEL.maxSpacingFactor × it that reaches the back
+ * uncapped. A stepped search rather than bisection, because the hold limit is not monotonic in
+ * spacing: 5 % steps find the first spacing that reaches, then 1 % steps back from it refine it.
+ */
+function widenToReach(input, fromM) {
+  const reaches = (s) => !layout(input, s, true).binding;
+  const coarse = fromM * 0.05;
+  for (let s = fromM + coarse; s <= fromM * MODEL.maxSpacingFactor + 1e-9; s += coarse) {
+    if (!reaches(s)) continue;
+    let best = s;
+    for (let f = s - fromM * 0.01; f > s - coarse + 1e-9; f -= fromM * 0.01) {
+      if (reaches(f)) best = f;
+      else break;
+    }
+    return best;
+  }
+  return null;
+}
+
+/** Everything else: flags, coverage, SPL, rigging and warnings for one laid-out array. */
+function solve(input, { presets, listenerZ, plan, hang, binding }, widen) {
+  const { box, genre } = input;
+  const { hold, boxesWithinHold } = plan;
   const warnings = [];
-
-  const hold = holdLimit({
-    dh: input.trimHeightM - box.heightM / 2 - listenerZ,
-    spacingM,
-    presets,
-    heightM: box.heightM,
-    tolerance: input.holdTolerance,
-    fromM: input.frontRowM,
-  });
-  const boxesWithinHold = Number.isFinite(hold.limitM)
-    ? Math.max(1, Math.floor((hold.limitM - input.frontRowM) / spacingM + 1e-9) + 1)
-    : Infinity;
-
-  const plan = input.mode === 'A' ? planModeA(input, spacingM) : planModeB(input, spacingM, hold, boxesWithinHold);
-  const hang = hangArray({
-    heightM: box.heightM,
-    presets,
-    trimHeightM: input.trimHeightM,
-    listenerZ,
-    targets: plan.targets,
-  });
   const rows = hang.rows;
   const boxCount = rows.length;
   if (boxCount === 0) {
     throw new Error('No box fits between the trim height and the listening plane.');
   }
-  let binding = plan.binding;
-  if (hang.truncated > 0 && input.mode === 'B') binding = 'trim';
 
   // Per-box flags.
   const tolM = input.holdTolerance * plan.spacingM;
@@ -147,7 +183,8 @@ export function calculate(raw = {}) {
     maxBoxes: box.rigging.maxBoxes,
     boxCount,
     withinRating: boxCount <= box.rigging.maxBoxes,
-    hangWeightKg: boxCount * box.weightKg + box.rigging.flyBarWeightKg,
+    hangWeightKg: boxCount * box.weightKg + (box.rigging.flyBarWeightKg ?? 0),
+    flyBarWeightKnown: box.rigging.flyBarWeightKg != null,
     arrayLengthM: boxCount * box.heightM,
     bottomEdgeM: bottom.bottomZ,
     topTiltDeg: top.tiltDeg,
@@ -194,6 +231,21 @@ export function calculate(raw = {}) {
     });
   }
   if (plan.notes) warnings.push(...plan.notes);
+  if (widen?.toM) {
+    warnings.push({
+      level: 'info',
+      code: 'WIDENED',
+      message:
+        `${round1(widen.fromM)} m spacing cannot reach ${input.roomDepthM} m with this box, so it was widened to ` +
+        `${round1(plan.spacingM)} m: about ${(10 * Math.log10(plan.spacingM / widen.fromM)).toFixed(1)} dB less level than the genre spacing gives.`,
+    });
+  } else if (widen) {
+    warnings.push({
+      level: 'info',
+      code: 'WIDEN_FAILED',
+      message: `Widening the spacing up to ${round1(widen.triedUpToM)} m does not reach ${input.roomDepthM} m either.`,
+    });
+  }
   const clamped = rows.filter((r) => r.atMaxSplay);
   const frontGap = bottom.aimM - input.frontRowM;
   if (frontGap > tolM) {
@@ -287,7 +339,7 @@ export function calculate(raw = {}) {
       fohMarginDb: fohMargin,
       cappedByNoiseLimit: effectiveTarget < genre.targetLAeqDbA,
     },
-    spacing: { genreM: genre.spacingM, targetM: spacingM, usedM: plan.spacingM },
+    spacing: { genreM: genre.spacingM, usedM: plan.spacingM, widenedFromM: widen?.toM ? widen.fromM : null },
     boxCount,
     neededBoxes: plan.neededBoxes,
     binding,
@@ -310,39 +362,76 @@ export function calculate(raw = {}) {
   };
 }
 
+/**
+ * Run the same job on every box and say which ones meet the spec. In mode B that means reaching
+ * the room depth at the genre spacing without hitting a cap, and giving the mix position the
+ * genre LAeq with its headroom. Mode A has no depth to reach, so only the level and the hard
+ * limits count there.
+ *
+ * @param {CalcInput} raw
+ * @returns {Array<{box: import('./boxes.js').BoxProfile, result: ReturnType<typeof calculate>|null, meetsSpec: boolean, reasons: string[]}>}
+ */
+export function compareBoxes(raw = {}) {
+  return BOX_LIST.map((box) => {
+    let result;
+    try {
+      result = calculate({ ...raw, box, boxId: box.id });
+    } catch (err) {
+      return { box, result: null, meetsSpec: false, reasons: [err.message] };
+    }
+    const reasons = [];
+    if (result.binding === 'rigging') {
+      reasons.push(`needs ${result.neededBoxes} boxes; the fly bar takes ${result.limits.riggingMaxBoxes}`);
+    } else if (result.binding === 'resolution') {
+      reasons.push(`holds the spacing only to ${round1(result.limits.holdLimitM)} m`);
+    } else if (result.binding === 'trim') {
+      reasons.push(`only ${result.boxCount} boxes fit above the audience at this trim`);
+    }
+    for (const w of result.warnings) {
+      if (w.level === 'error') reasons.push(w.message);
+    }
+    if (result.target.fohMarginDb < 0) {
+      reasons.push(`${(-result.target.fohMarginDb).toFixed(1)} dB short at the mix position`);
+    }
+    return { box, result, meetsSpec: reasons.length === 0, reasons };
+  });
+}
+
 /** Mode A: anchor the bottom box on the front row and step back one spacing per box. */
-function planModeA(input, spacingM) {
+function planModeA(input, spacingM, holdAt) {
   const n = input.boxCount;
   const targets = Array.from({ length: n }, (_, k) => input.frontRowM + (n - 1 - k) * spacingM);
-  return { targets, spacingM, neededBoxes: null, binding: null, notes: [] };
+  const hold = holdAt(spacingM);
+  return { targets, spacingM, neededBoxes: null, binding: null, notes: [], hold, boxesWithinHold: boxesWithin(input, hold, spacingM) };
 }
 
 /**
- * Mode B: enough boxes to span front row to back at no more than the genre spacing (tightened
+ * Mode B: enough boxes to span front row to back at no more than the requested spacing (tightened
  * so the aim points land exactly on both ends), capped by the fly-bar rating and the
  * angle-resolution limit. When capped, the spacing is kept and the array is anchored on the
  * front row, leaving the back uncovered rather than thinning the whole floor. Delays are only
  * suggested when more than two spacings are left over; closer than that the top boxes' upper
  * pattern still reaches.
  */
-function planModeB(input, spacingM, hold, boxesWithinHold) {
+function planModeB(input, spacingM, holdAt) {
   const span = input.roomDepthM - input.frontRowM;
   const needed = span <= 0 ? 1 : Math.ceil(span / spacingM - 1e-9) + 1;
+  const used = needed > 1 ? span / (needed - 1) : spacingM;
   const rigMax = input.box.rigging.maxBoxes;
-  const resMax = input.roomDepthM > hold.limitM ? boxesWithinHold : Infinity;
-  const n = Math.min(needed, rigMax, resMax);
-  const notes = [];
-  if (n === needed) {
-    const used = n > 1 ? span / (n - 1) : spacingM;
-    const targets = Array.from({ length: n }, (_, k) => input.roomDepthM - k * used);
-    return { targets, spacingM: used, neededBoxes: needed, binding: null, notes };
+  const holdUsed = holdAt(used);
+  if (needed <= rigMax && input.roomDepthM <= holdUsed.limitM) {
+    const targets = Array.from({ length: needed }, (_, k) => input.roomDepthM - k * used);
+    return { targets, spacingM: used, neededBoxes: needed, binding: null, notes: [], hold: holdUsed, boxesWithinHold: boxesWithin(input, holdUsed, used) };
   }
-  const binding = n === resMax && resMax <= rigMax ? 'resolution' : 'rigging';
+  const hold = holdAt(spacingM);
+  const withinHold = boxesWithin(input, hold, spacingM);
+  const n = Math.max(1, Math.min(needed - 1, rigMax, withinHold));
+  const binding = rigMax <= Math.min(needed - 1, withinHold) ? 'rigging' : 'resolution';
   const reach = input.frontRowM + (n - 1) * spacingM;
   const remainder = input.roomDepthM - reach;
   const fitSpacing = span / (Math.min(rigMax, needed) - 1);
   const cap = binding === 'rigging' ? `fly-bar rating (${rigMax})` : 'angle-resolution limit';
-  notes.push(
+  const notes = [
     remainder <= 2 * spacingM
       ? {
           level: 'info',
@@ -361,9 +450,14 @@ function planModeB(input, spacingM, hold, boxesWithinHold) {
               ? `, or stretch to ${round1(fitSpacing)} m spacing (about ${(10 * Math.log10(fitSpacing / spacingM)).toFixed(1)} dB less level).`
               : '.'),
         },
-  );
+  ];
   const targets = Array.from({ length: n }, (_, k) => input.frontRowM + (n - 1 - k) * spacingM);
-  return { targets, spacingM, neededBoxes: needed, binding, notes };
+  return { targets, spacingM, neededBoxes: needed, binding, notes, hold, boxesWithinHold: withinHold };
+}
+
+/** How many boxes, from the front row back, aim inside the hold limit at this spacing. */
+function boxesWithin(input, hold, spacingM) {
+  return Number.isFinite(hold.limitM) ? Math.max(1, Math.floor((hold.limitM - input.frontRowM) / spacingM + 1e-9) + 1) : Infinity;
 }
 
 function resolveInput(raw) {
@@ -373,8 +467,8 @@ function resolveInput(raw) {
   if (input.mode !== 'A' && input.mode !== 'B') throw new Error(`Unknown mode "${raw.mode}" (use A or B).`);
   input.genre = typeof input.genre === 'string' ? GENRES[input.genre.toLowerCase()] : input.genre;
   if (!input.genre) throw new Error(`Unknown genre "${raw.genre}" (use ${Object.keys(GENRES).join(', ')}).`);
-  input.box = input.box ?? BOXES[input.boxId];
-  if (!input.box) throw new Error(`Unknown box "${input.boxId}".`);
+  input.box = input.box ?? findBox(input.boxId);
+  if (!input.box) throw new Error(`Unknown box "${input.boxId}" (use ${BOX_LIST.map((b) => b.name).join(', ')}).`);
   const positive = ['trimHeightM', 'listenerHeightM', 'frontRowM', 'holdTolerance'];
   if (input.mode === 'B') positive.push('roomDepthM');
   for (const k of positive) {

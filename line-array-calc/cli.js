@@ -5,14 +5,18 @@
 //   node cli.js --mode A --genre rock --boxes 12
 //   node cli.js --mode B --genre edm --depth 45 --trim 10 --noise-limit 100
 //   node cli.js --mode B --genre pop --depth 35 --json
+//   node cli.js --mode B --genre edm --depth 45 --box gtx12
+//   node cli.js --mode B --genre edm --depth 45 --compare
 
 import { parseArgs } from 'node:util';
-import { calculate, GENRES } from './src/index.js';
+import { BOX_LIST, calculate, compareBoxes, GENRES } from './src/index.js';
 
 const { values: args } = parseArgs({
   options: {
     mode: { type: 'string' },
     genre: { type: 'string' },
+    box: { type: 'string' },
+    compare: { type: 'boolean' },
     boxes: { type: 'string' },
     depth: { type: 'string' },
     trim: { type: 'string' },
@@ -34,6 +38,8 @@ if (args.help) {
 
   --mode A|B          A: box count -> coverage. B: room depth -> box count. Default: both.
   --genre NAME        ${Object.keys(GENRES).join(' | ')}. Default: all.
+  --box NAME          ${BOX_LIST.map((b) => b.name.replace(/^(RCF|TT\+) /, '')).join(' | ')}. Default: HDL 30-A.
+  --compare           Run every box and show which ones meet the spec.
   --boxes N           Mode A box count (default 12).
   --depth M           Mode B distance from the array to the last listeners (default 40).
   --trim M            Height of the top of the array (default 9).
@@ -53,13 +59,14 @@ const num = (v) => (v === undefined ? undefined : Number(v));
 const modes = args.mode ? [args.mode.toUpperCase()] : ['A', 'B'];
 const genres = args.genre ? [args.genre.toLowerCase()] : Object.keys(GENRES);
 const results = [];
+const comparisons = [];
 try {
   for (const mode of modes) {
     for (const genre of genres) {
-      results.push(
-        calculate({
+      const job = {
           mode,
           genre,
+          boxId: args.box,
           boxCount: num(args.boxes),
           roomDepthM: num(args.depth),
           trimHeightM: num(args.trim),
@@ -71,8 +78,9 @@ try {
           noiseLimitDbA: num(args['noise-limit']),
           spacingM: num(args.spacing),
           holdTolerance: num(args.tolerance),
-        }),
-      );
+      };
+      if (args.compare) comparisons.push({ mode, genre, rows: compareBoxes(job) });
+      else results.push(calculate(job));
     }
   }
 } catch (err) {
@@ -80,10 +88,32 @@ try {
   process.exit(1);
 }
 
-if (args.json) {
+if (args.compare) {
+  console.log(comparisons.map(compareReport).join('\n\n'));
+} else if (args.json) {
   console.log(JSON.stringify(results.length === 1 ? results[0] : results, null, 2));
 } else {
   console.log(results.map(report).join('\n\n'));
+}
+
+function compareReport({ mode, genre, rows }) {
+  const first = rows.find((c) => c.result)?.result;
+  const head = first
+    ? `${first.genre.label} · Mode ${mode}` + (mode === 'B' ? ` · ${first.input.roomDepthM} m room` : ` · ${first.input.boxCount} boxes`)
+    : `${genre} · Mode ${mode}`;
+  const lines = [head, `                   spec  boxes  spacing  mix margin  why not`];
+  for (const c of rows) {
+    const r = c.result;
+    lines.push(
+      `${c.box.name.padEnd(18)} ${c.meetsSpec ? ' ok ' : ' -- '} ` +
+        (r
+          ? `${String(r.boxCount).padStart(5)} ${`${r.spacing.usedM.toFixed(2)} m`.padStart(8)}${r.spacing.widenedFromM ? '*' : ' '} ${`${r.target.fohMarginDb >= 0 ? '+' : ''}${r.target.fohMarginDb.toFixed(1)} dB`.padStart(10)}  `
+          : ''.padEnd(37)) +
+        c.reasons.join('; '),
+    );
+  }
+  if (rows.some((c) => c.result?.spacing.widenedFromM)) lines.push('* spacing widened from the genre value to reach the back');
+  return lines.join('\n');
 }
 
 function report(r) {
@@ -106,7 +136,7 @@ function report(r) {
     `Target    ${r.target.laeqDbA} dBA LAeq at mix, ${r.target.headroomDb} dB headroom (${r.target.requiredPeakDbA} dBA peak)` +
       `${r.target.cappedByNoiseLimit ? ' [noise-limited]' : ''} · spacing ${m(r.spacing.usedM, 2)}`,
     `Coverage  ${m(r.coverage.startM)} -> ${m(r.coverage.endM)} (pattern edge from ${m(r.coverage.firstCoveredM)}) · hold limit ${m(r.limits.holdLimitM)} · max useful boxes ${r.limits.maxUsefulBoxes}`,
-    `Rigging   ${r.rigging.boxCount}/${r.rigging.maxBoxes} on ${r.rigging.flyBar} · ${r.rigging.hangWeightKg.toFixed(0)} kg incl. fly bar · ` +
+    `Rigging   ${r.rigging.boxCount}/${r.rigging.maxBoxes} on ${r.rigging.flyBar} · ${r.rigging.hangWeightKg.toFixed(0)} kg ${r.rigging.flyBarWeightKnown ? 'incl. fly bar' : 'boxes only'} · ` +
       `array ${m(r.rigging.arrayLengthM)}, bottom ${m(r.rigging.bottomEdgeM)} · top tilt ${r.rigging.topTiltDeg.toFixed(1)}°`,
     '',
     `SPL (dBA)        distance  max LAeq  at target   peak  confidence`,

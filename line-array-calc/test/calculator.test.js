@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { calculate, HDL_30_A, GENRES } from '../src/index.js';
+import { calculate, compareBoxes, findBox, BOX_LIST, HDL_30_A, GENRES } from '../src/index.js';
 import { aimDistance, bracketPresets, centreOf, hangArray, holdLimit, solveTilt } from '../src/geometry.js';
 import { A_WEIGHTING_OFFSET_DB, airAbsorptionDbPerM } from '../src/acoustics.js';
 
@@ -69,7 +69,8 @@ test('mode B spans front row to back at no more than the genre spacing', () => {
 });
 
 test('mode B caps at the angle-resolution limit and says what to do with the rest', () => {
-  const r = calculate({ mode: 'B', genre: 'rock', roomDepthM: 70 });
+  // A fixed spacing is never widened, so the angle-resolution limit is what stops it.
+  const r = calculate({ mode: 'B', genre: 'rock', roomDepthM: 70, spacingM: 3 });
   assert.equal(r.binding, 'resolution');
   assert.equal(r.boxCount, r.limits.boxesWithinHold);
   assert.ok(r.boxCount < r.neededBoxes);
@@ -79,7 +80,8 @@ test('mode B caps at the angle-resolution limit and says what to do with the res
 
 test('mode B caps at the fly-bar rating when resolution is not the limit', () => {
   const fine = { ...HDL_30_A, splayPresetsDeg: Array.from({ length: 101 }, (_, i) => i / 10), unverified: {} };
-  const r = calculate({ mode: 'B', genre: 'classical', roomDepthM: 120, box: fine });
+  // A fixed spacing is never widened, so the 20-box rating is what stops it.
+  const r = calculate({ mode: 'B', genre: 'classical', roomDepthM: 120, box: fine, spacingM: 5 });
   assert.equal(r.binding, 'rigging');
   assert.equal(r.boxCount, 20);
   assert.ok(r.warnings.some((w) => w.code === 'CAPPED' && /stretch/.test(w.message)));
@@ -118,7 +120,7 @@ test('mid-floor level matches the energy-density formula Lmax + 10log(0.754·θv
   const r = calculate({ mode: 'B', genre: 'rock', roomDepthM: 30, hangs: 1 });
   const x = Math.round((r.coverage.startM + r.coverage.endM) / 2);
   const box = r.rows.reduce((a, b) => (Math.abs(b.aimM - x) < Math.abs(a.aimM - x) ? b : a));
-  const analytic = HDL_30_A.maxSplDb + 10 * Math.log10((0.754 * 15 * (Math.PI / 180)) / (r.spacing.usedM * (box.centreHeightM - 1.7)));
+  const analytic = HDL_30_A.maxSplDb + 10 * Math.log10((0.754 * HDL_30_A.coverageVDeg * (Math.PI / 180)) / (r.spacing.usedM * (box.centreHeightM - 1.7)));
   const modelled = r.profile.find((p) => p.x === x).hangPeakDbA - A_WEIGHTING_OFFSET_DB;
   near(modelled, analytic, 1.5);
 });
@@ -160,9 +162,55 @@ test('a calibration source raises confidence one level', () => {
 });
 
 test('unverified box data is always flagged', () => {
-  const r = calculate({ mode: 'A', genre: 'rock', boxCount: 8 });
-  assert.ok(r.warnings.some((w) => w.code === 'UNVERIFIED_DATA'));
+  const r = calculate({ mode: 'A', genre: 'rock', boxCount: 8, boxId: 'hdl28' });
+  assert.ok(r.warnings.some((w) => w.code === 'UNVERIFIED_DATA' && /splay presets/.test(w.message)));
   assert.equal(r.geometryConfidence, 'medium');
+  const verified = calculate({ mode: 'A', genre: 'rock', boxCount: 8, boxId: 'hdl50' });
+  assert.ok(!verified.warnings.some((w) => w.code === 'UNVERIFIED_DATA'));
+  assert.equal(verified.geometryConfidence, 'high');
+});
+
+test('every box profile is usable', () => {
+  assert.equal(BOX_LIST.length, 8);
+  for (const box of BOX_LIST) {
+    const p = box.splayPresetsDeg;
+    assert.ok(p.length >= 2 && p.every((v, i) => v > 0 && (i === 0 || v > p[i - 1])), `${box.name} presets ${p}`);
+    assert.ok(box.heightM > 0.1 && box.heightM < 0.5 && box.weightKg > 0 && box.rigging.maxBoxes > 0, box.name);
+    assert.ok(box.maxSplDb > 120 && box.coverageVDeg > 0 && box.coverageHDeg > 0, box.name);
+  }
+});
+
+test('findBox accepts loose names', () => {
+  for (const [q, name] of [['hdl26', 'RCF HDL 26-A'], ['HDL 30', 'RCF HDL 30-A'], ['hdl50', 'RCF HDL 50-A'], ['HDL 50-A 4K', 'RCF HDL 50-A 4K'], ['gtx7', 'TT+ GTX 7C'], ['GTX12', 'TT+ GTX 12']]) {
+    assert.equal(findBox(q)?.name, name, q);
+  }
+  assert.equal(findBox('hdl'), undefined, 'ambiguous');
+  assert.throws(() => calculate({ boxId: 'nope' }), /Unknown box/);
+});
+
+test('distance mode widens the spacing to reach the back when the genre spacing cannot', () => {
+  const r = calculate({ mode: 'B', genre: 'edm', roomDepthM: 40, boxId: 'gtx12' });
+  assert.equal(r.binding, null);
+  assert.equal(r.spacing.widenedFromM, GENRES.edm.spacingM);
+  assert.ok(r.spacing.usedM > GENRES.edm.spacingM);
+  near(r.rows[0].targetM, 40, 1e-9);
+  assert.ok(r.warnings.some((w) => w.code === 'WIDENED'));
+  // A hand-set spacing is respected instead.
+  const fixed = calculate({ mode: 'B', genre: 'edm', roomDepthM: 40, boxId: 'gtx12', spacingM: 2 });
+  assert.equal(fixed.spacing.widenedFromM, null);
+  assert.ok(fixed.binding);
+});
+
+test('compareBoxes marks which boxes meet the spec, with reasons for the rest', () => {
+  const all = compareBoxes({ mode: 'B', genre: 'rock', roomDepthM: 40 });
+  assert.equal(all.length, BOX_LIST.length);
+  for (const c of all) {
+    const ok = c.result.binding == null && c.result.target.fohMarginDb >= 0 && !c.result.warnings.some((w) => w.level === 'error');
+    assert.equal(c.meetsSpec, ok, c.box.name);
+    assert.equal(c.reasons.length === 0, ok, c.box.name);
+  }
+  assert.equal(all.find((c) => c.box.id === 'tt-gtx-12').meetsSpec, true);
+  assert.equal(all.find((c) => c.box.id === 'rcf-hdl-26-a').meetsSpec, false);
 });
 
 test('air absorption matches ISO 9613-2 Table 2 (20 °C, 70 % RH)', () => {

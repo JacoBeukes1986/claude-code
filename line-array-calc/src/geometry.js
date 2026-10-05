@@ -137,12 +137,14 @@ export function requiredSplayDeg(x, spacingM, dh, heightM) {
  *    (half the preset gap, projected onto the floor as gap/2·r²/dh) larger than
  *    tolerance × spacing.
  * Uses the top box's height above the plane, since the boxes aimed furthest hang highest.
+ * The limit is not monotonic in spacing: a wider spacing can move the wanted splay into a
+ * coarser preset gap. `untilM` stops the scan early when only "does it reach?" matters.
  *
  * @returns {{limitM: number, reason: 'min-splay'|'resolution'|null}}
  */
-export function holdLimit({ dh, spacingM, presets, heightM, tolerance, fromM }) {
+export function holdLimit({ dh, spacingM, presets, heightM, tolerance, fromM, untilM = 500 }) {
   const step = 0.05;
-  for (let x = Math.max(fromM, step); x <= 500; x += step) {
+  for (let x = Math.max(fromM, step); x <= untilM; x += step) {
     const wanted = requiredSplayDeg(x, spacingM, dh, heightM);
     if (wanted < presets[0]) return { limitM: x, reason: 'min-splay' };
     const [lo, hi] = bracketPresets(presets, wanted);

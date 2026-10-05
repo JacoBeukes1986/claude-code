@@ -1,5 +1,5 @@
-<title>HDL 30-A Array Calculator</title>
-<meta name="description" content="Splay list, coverage, SPL and limit checks for an RCF HDL 30-A line array, by genre.">
+<title>HDL & GTX Array Calculator</title>
+<meta name="description" content="Splay list, coverage, SPL and limit checks for RCF HDL and TT+ GTX line arrays, by genre.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
@@ -184,6 +184,12 @@
   .seg .opt b { font: 600 16px/1.2 var(--font-display); letter-spacing: 0.02em; }
   .seg .opt small { color: var(--muted); font-size: 12px; line-height: 1.35; }
   .seg input:checked + .opt { border-color: var(--accent); background: var(--accent-wash); box-shadow: inset 0 0 0 1px var(--accent); }
+  .seg input:disabled { cursor: not-allowed; }
+  .seg input:disabled + .opt { opacity: 0.5; background: var(--bg); border-style: dashed; }
+  .seg .opt small.status { font-weight: 500; }
+  .seg .opt small.status.ok { color: var(--ok); }
+  .seg .opt small.status.no { color: var(--crit); }
+  .box-hint { margin-top: 8px; }
   .seg input:focus-visible + .opt { outline: 2px solid var(--accent); outline-offset: 2px; }
   .fields { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 12px; }
   .field { display: grid; gap: 4px; min-width: 0; }
@@ -197,6 +203,7 @@
     background: var(--surface);
     font-variant-numeric: tabular-nums;
   }
+  .field input[readonly] { background: var(--bg); color: var(--ink-2); }
   .field input:focus-visible, .field select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-color: var(--accent); }
   .field input::placeholder { color: var(--muted); }
   details.dials summary { cursor: pointer; }
@@ -358,8 +365,8 @@
 <div class="page">
   <header class="masthead">
     <div>
-      <p class="eyebrow">Line array module · v1 · even floor spacing</p>
-      <h1>HDL 30-A Array Calculator</h1>
+      <p class="eyebrow">Line array module · RCF HDL and TT+ GTX · even floor spacing</p>
+      <h1>HDL &amp; GTX Array Calculator</h1>
     </div>
     <p class="data-flag" id="dataFlag" hidden></p>
   </header>
@@ -377,9 +384,15 @@
       </fieldset>
 
       <div class="fields">
-        <label class="field wide" data-mode="A"><span>Boxes per hang</span><input id="boxCount" name="boxCount" type="number" min="1" max="40" step="1" value="12" inputmode="numeric"></label>
         <label class="field wide" data-mode="B" hidden><span>Room depth: array to last listener (m)</span><input id="roomDepthM" name="roomDepthM" type="number" min="1" step="0.5" value="40" inputmode="decimal"></label>
+        <label class="field wide"><span id="boxCountLabel">Boxes per hang</span><input id="boxCount" name="boxCount" type="number" min="1" max="40" step="1" value="12" inputmode="numeric"></label>
       </div>
+
+      <fieldset>
+        <legend>Speaker</legend>
+        <div class="seg two" id="boxSeg"></div>
+        <p class="hint box-hint" id="boxHint" hidden></p>
+      </fieldset>
 
       <fieldset>
         <legend>Venue</legend>
