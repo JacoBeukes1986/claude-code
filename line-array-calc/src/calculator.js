@@ -160,7 +160,7 @@ export function calculate(raw = {}) {
     warnings.push({
       level: 'warn',
       code: 'UNVERIFIED_DATA',
-      message: `Not yet checked against the ${box.name} rigging manual: ${listText(unverified.map(([, v]) => v.label))}. Splays and limits are indicative only.`,
+      message: `Not yet checked against the ${box.name} rigging manual: ${listText(unverified.map(([, v]) => v.label))}. Results that depend on them are indicative only.`,
     });
   }
   if (!rigging.withinRating) {

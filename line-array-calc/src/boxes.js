@@ -33,8 +33,8 @@ export const HDL_30_A = {
   heightM: 0.293,
   depthM: 0.502,
   weightKg: 25,
-  // Placeholder: whole degrees from the 0.2° minimum up to an assumed 10° maximum.
-  splayPresetsDeg: [0.2, 1, 2, 3, 4, 5, 6, 7, 8, 10],
+  // Rear suspension bracket positions, HDL 30-A owner manual p. 26.
+  splayPresetsDeg: [0.2, 0.7, 1.7, 2.7, 3.7, 5, 7, 10, 14],
   rigging: {
     flyBar: 'FL-B HDL 30',
     flyBarWeightKg: 21.2,
@@ -46,13 +46,6 @@ export const HDL_30_A = {
   },
   splCalibration: { offsetDb: 0, source: null },
   unverified: {
-    splayPresetsDeg: {
-      label: 'splay presets',
-      note:
-        'Full preset list not confirmed. Excerpts of the owner manual mention a 0.2° minimum ' +
-        'and a 1.4° pin position, so the real list is probably not whole degrees. Copy the ' +
-        'exact list from the HDL 30-A rigging manual.',
-    },
     heightM: {
       label: 'hinge pitch',
       note: '293 mm is the catalogue cabinet height; confirm the hinge pitch in the manual.',
@@ -67,7 +60,8 @@ export const HDL_30_A = {
   sources: [
     'RCF HDL 30-A product page (max SPL 137 dB, 100° x 15°, 50 Hz-20 kHz, 2200 W, 293 x 705 x 502 mm, 25 kg)',
     'RCF FL-B HDL 30 fly bar listing (up to 20 x HDL 30-A or HDL 38-AS, 21.2 kg)',
-    'HDL 30-A owner manual excerpts (0.2° minimum angle; safety factor configuration-dependent)',
+    'HDL 30-A owner manual p. 26: splay presets 0.2, 0.7, 1.7, 2.7, 3.7, 5, 7, 10, 14°',
+    'HDL 30-A owner manual excerpts (safety factor configuration-dependent)',
   ],
 };
 

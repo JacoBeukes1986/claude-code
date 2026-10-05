@@ -22,19 +22,19 @@ r.boxCount, r.rows /* splay list */, r.coverage, r.spl.foh, r.warnings;
 
 ## Check these before trusting the output
 
-RCF's site and every mirror of the manual were blocked from the build environment, so these numbers come
-from search snippets and retailer listings. They are flagged on every result until you clear
-them in [`src/boxes.js`](src/boxes.js):
+The splay presets come from the HDL 30-A owner manual (rear suspension bracket, p. 26). The rest
+comes from search snippets and retailer listings, because RCF's site was blocked from the build
+environment. Every result flags these until you clear them in [`src/boxes.js`](src/boxes.js):
 
 | Field | Value used | Status |
 |---|---|---|
-| Splay presets | 0.2°, 1–8° in 1° steps, 10° | **Placeholder.** Manual excerpts mention a 0.2° minimum and a 1.4° pin position, so the real list is probably finer than whole degrees. |
+| Splay presets | 0.2°, 0.7°, 1.7°, 2.7°, 3.7°, 5°, 7°, 10°, 14° | Verified: manual p. 26. |
 | Hinge pitch | 293 mm (catalogue height) | Confirm in the manual. |
 | Fly bar | FL-B HDL 30, 20 boxes max, 21.2 kg | RCF says the safety factor depends on the configuration. Check every hang in RCF Easy Shape Designer; this tool does not compute rigging loads. |
 | Box | 137 dB peak @ 1 m, 100° × 15°, 25 kg | RCF spec. |
 
-The 0.2° minimum matters: the top of the array can never be truly parallel, which is what sets
-the far-field limit below.
+There is no 0° position: the top of the array can never be truly parallel, and that 0.2°
+minimum is what sets the far-field limit below.
 
 ## How it works
 
@@ -44,7 +44,7 @@ back one spacing per box. Mode B anchors the top box on the back row and uses en
 reach the front row at no more than the genre spacing. The top box gets its exact tilt from the
 fly-bar pick point. Each junction below gets one of the two presets either side of the splay the
 geometry asks for: whichever lands that box's tilt closest to its own floor target. Rounding error
-carries forward instead of piling up, so presets dither (0.2/1/0.2/1…) and cumulative drift
+carries forward instead of piling up, so presets dither (0.2/0.7/0.2/0.7…) and cumulative drift
 stays within half a preset step. The splay list shows the drift per box.
 
 **Limits.** Mode B caps the box count at whichever comes first:

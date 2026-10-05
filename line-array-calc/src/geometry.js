@@ -59,8 +59,8 @@ export function bracketPresets(presets, angle) {
  * geometry asks for some splay; the junction gets one of the two presets either side of it,
  * whichever brings the box's absolute tilt closer to the tilt that would hit its own floor
  * target. Because that comparison starts from where the box above actually ended up, rounding
- * error carries into the next junction instead of piling up: the presets dither (0.2°, 1°,
- * 0.2°, 1° ... to average 0.6°) and the cumulative drift stays within half a preset step while
+ * error carries into the next junction instead of piling up: the presets dither (0.2°, 0.7°,
+ * 0.2°, 0.7° ... to average 0.45°) and the cumulative drift stays within half a preset step while
  * the wanted splay is inside the preset range. On a tie the smaller angle wins.
  *
  * Boxes whose bottom edge would hang below the listening plane cannot aim down at it; the hang
